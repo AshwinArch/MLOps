@@ -1,0 +1,39 @@
+# DEMO ONLY - seeds data, simulates failures, runs migrations on start, and is NOT hardened. Never promote this file.
+# docker compose up --build   ->  UI http://localhost:4200   API docs http://localhost:8000/docs
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mlops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-mlops}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mlops}"]
+      interval: 5s
+      retries: 10
+    # no published port: the database is reachable only inside the compose network
+
+  backend:
+    build: { context: ., dockerfile: backend/Dockerfile }
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mlops}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}@db:5432/${POSTGRES_DB:-mlops}
+      CORS_ORIGINS: http://localhost:4200
+      # Demo-only switches. In any real environment leave these at their secure defaults (see docs/architecture.md).
+      MIGRATE_ON_START: "true"
+      SEED_ON_STARTUP: "true"
+      ENABLE_FAILURE_SIMULATION: "true"
+      DEFAULT_ROLE: ${DEFAULT_ROLE:-viewer}
+      REQUIRE_FOUR_EYES: ${REQUIRE_FOUR_EYES:-false}   # demo: one person plays every role; set true for real use
+      REQUIRE_ARTIFACT_CHECKSUM: "false"   # demo versions carry no checksum; real use keeps the default (true)
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  frontend:
+    build: { context: ., dockerfile: frontend/Dockerfile }
+    ports: ["4200:8080"]
+    depends_on: [backend]
+
+volumes:
+  pgdata:

@@ -1,0 +1,23 @@
+.env
+*.db
+*.db-*
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+node_modules/
+dist/
+.angular/
+
+# secrets and local state: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.venv/
+venv/
+mlops.db
+.vscode/

@@ -15,6 +15,7 @@ Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, PostgreSQL 16 / SQLit
 
 ## Run it
 ```bash
+cp .env.example .env            # then set POSTGRES_PASSWORD (required, no default)
 docker compose up --build          # UI http://localhost:4200  API docs http://localhost:8000/docs
 ```
 Local without Docker:
@@ -24,12 +25,20 @@ make run                            # backend :8000 (SQLite, sample data auto-se
 cd frontend && npm start            # UI :4200, proxies /api -> :8000
 bash scripts/demo.sh                # scripted acceptance walk-through against the API
 ```
-Use the **Role** selector in the UI header (viewer / engineer / approver / admin); production deployment needs `approver`+.
+Use the **User** and **Role** fields in the UI header (viewer / engineer / approver / admin); production deployment needs `approver`+.
+
+**Authentication.** Set `AUTH_MODE=jwt` (with `JWT_SECRET` or `JWT_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`) and every route except `/health` and `/ready` requires a valid bearer token; identity is the token `sub` and role comes from the `role` claim, and `X-User`/`X-Role` are ignored. `ENVIRONMENT=production` makes the API and worker refuse to start with demo settings (header auth, simulated runtime, seeding, SQLite, missing metrics token...). `RUNTIME_ADAPTER=http` selects the generic REST runtime adapter (`app/workers/http_runtime.py`); the simulator is for tests and demos.
+
+**Secure by default.** Out of the box the API is `DEFAULT_ROLE=viewer` (read-only), no seeding, no failure simulation, four-eyes approval on, schema created only by migrations. `make run` and `docker-compose.yml` (DEMO ONLY, do not promote) switch on demo-only flags (`REQUIRE_ARTIFACT_CHECKSUM=false`, `SEED_ON_STARTUP`, `ENABLE_FAILURE_SIMULATION`, `MIGRATE_ON_START`, `REQUIRE_FOUR_EYES=false`) so one person can walk every role; never use them in a real environment. The seeded metrics are dated July 2026, so the monitoring page honestly shows **STALE**. Identity headers are a stand-in for OIDC (see `docs/known-limitations.md`).
+
+Review feedback and what was done about each item: [`docs/review-response.md`](docs/review-response.md).
 
 ## Tests
 ```bash
-make test               # backend (50 tests, 92% coverage) + frontend (10 tests)
-make test-backend       # cd backend && python -m pytest --cov=app
+make test               # backend (109 tests, 95% coverage) + frontend (22 tests)
+make test-backend       # cd backend && python -m pytest --cov=app --cov-fail-under=85
+make test-pg            # same suite on PostgreSQL: TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/mlops_test
+make lint               # ruff + import-linter architecture contracts
 make test-frontend      # cd frontend && npx ng test --watch=false --browsers=ChromeHeadlessCI
 ```
 Strategy: [`docs/test-strategy.md`](docs/test-strategy.md).
