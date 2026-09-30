@@ -1,0 +1,29 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+extend-exclude = ["alembic/versions"]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]  # FastAPI Depends() in defaults is idiomatic
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Domain is pure (no framework, DB, or upper layers)"
+type = "forbidden"
+source_modules = ["app.domain"]
+forbidden_modules = ["sqlalchemy", "fastapi", "pydantic", "app.db", "app.services", "app.api", "app.workers"]
+
+[[tool.importlinter.contracts]]
+name = "Services never depend on the HTTP layer"
+type = "forbidden"
+source_modules = ["app.services", "app.workers", "app.db"]
+forbidden_modules = ["app.api", "app.main", "fastapi"]

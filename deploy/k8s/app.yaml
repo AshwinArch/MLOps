@@ -1,0 +1,219 @@
+# Reference Kubernetes deployment view: designed, NOT cluster-validated (CI runs kubeconform for schema checks only).
+# Traffic path: Ingress -> frontend (nginx) -> /api/ proxied to the `api` Service. The browser never reaches the API directly.
+# Postgres is a managed service; secrets come from the cluster secret store.
+# Apply order: namespace/secret -> db-migrate Job (wait) -> everything else.
+apiVersion: v1
+kind: Namespace
+metadata: { name: mlops }
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: db-migrate, namespace: mlops }   # once per release, never per replica (docs/g12-questions.md Q8)
+spec:
+  backoffLimit: 2
+  template:
+    metadata: { labels: { app: db-migrate } }
+    spec:
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: migrate
+          image: registry.example.com/mlops-backend:1.0.0
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: mlops-db, key: url } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api, namespace: mlops }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: api } }
+  strategy: { rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: api
+          image: registry.example.com/mlops-backend:1.0.0
+          ports: [{ containerPort: 8000 }]
+          env:
+            - { name: WORKER_ENABLED, value: "false" }     # workers run as their own Deployment
+            - { name: ENVIRONMENT, value: "production" }        # startup guard refuses unsafe settings
+            - { name: AUTH_MODE, value: "jwt" }
+            - { name: JWT_ISSUER, value: "https://idp.example.com/" }
+            - { name: JWT_AUDIENCE, value: "mlops-api" }
+            - { name: JWT_JWKS_URL, value: "https://idp.example.com/.well-known/jwks.json" }
+            - { name: RUNTIME_ADAPTER, value: "http" }
+            - { name: RUNTIME_HTTP_URL, value: "https://runtime.internal.example.com" }
+            - name: RUNTIME_HTTP_TOKEN
+              valueFrom: { secretKeyRef: { name: mlops-runtime, key: token } }
+            - name: METRICS_TOKEN
+              valueFrom: { secretKeyRef: { name: mlops-runtime, key: metrics-token } }
+            - { name: MIGRATE_ON_START, value: "false" }
+            - { name: AUTO_CREATE_SCHEMA, value: "false" }
+            - { name: DEFAULT_ROLE, value: "viewer" }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: mlops-db, key: url } }
+          readinessProbe: { httpGet: { path: /ready, port: 8000 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8000 }, periodSeconds: 10 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { memory: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api, namespace: mlops }
+spec: { selector: { app: api }, ports: [{ port: 8000, targetPort: 8000 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: worker, namespace: mlops }
+spec:
+  replicas: 2            # claims are exclusive, so scale freely
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata:
+      labels: { app: worker }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9100", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: worker
+          image: registry.example.com/mlops-backend:1.0.0
+          command: ["python", "-m", "app.workers.run"]
+          ports: [{ containerPort: 9100, name: metrics }]   # worker counters are scraped here (deployments_*_total)
+          env:
+            - { name: ENVIRONMENT, value: "production" }        # startup guard refuses unsafe settings
+            - { name: AUTH_MODE, value: "jwt" }
+            - { name: JWT_ISSUER, value: "https://idp.example.com/" }
+            - { name: JWT_AUDIENCE, value: "mlops-api" }
+            - { name: JWT_JWKS_URL, value: "https://idp.example.com/.well-known/jwks.json" }
+            - { name: RUNTIME_ADAPTER, value: "http" }
+            - { name: RUNTIME_HTTP_URL, value: "https://runtime.internal.example.com" }
+            - name: RUNTIME_HTTP_TOKEN
+              valueFrom: { secretKeyRef: { name: mlops-runtime, key: token } }
+            - name: METRICS_TOKEN
+              valueFrom: { secretKeyRef: { name: mlops-runtime, key: metrics-token } }
+            - { name: AUTO_CREATE_SCHEMA, value: "false" }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: mlops-db, key: url } }
+          livenessProbe: { httpGet: { path: /metrics, port: 9100 }, periodSeconds: 15, failureThreshold: 4 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 100m, memory: 192Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: mlops }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 101 }
+      containers:
+        - name: frontend
+          image: registry.example.com/mlops-frontend:1.0.0   # nginx-unprivileged, listens on 8080
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: API_UPSTREAM, value: "http://api:8000" }   # the api Service name in this namespace
+          readinessProbe: { httpGet: { path: /, port: 8080 } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 50m, memory: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: mlops }
+spec: { selector: { app: frontend }, ports: [{ port: 80, targetPort: 8080 }] }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api, namespace: mlops }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 3
+  maxReplicas: 12
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } } }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: api, namespace: mlops }
+spec: { minAvailable: 2, selector: { matchLabels: { app: api } } }
+---
+# Default deny, then explicit allows:
+#   ingress-controller -> frontend; frontend -> api; Prometheus (ns `monitoring`) -> api:8000, worker:9100;
+#   api/worker/db-migrate -> DNS, Postgres, runtime/artifact store; frontend -> DNS + api.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: mlops }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-ingress-controller-to-frontend, namespace: mlops }
+spec:
+  podSelector: { matchLabels: { app: frontend } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+      ports: [{ port: 8080, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-frontend-to-api, namespace: mlops }
+spec:
+  podSelector: { matchLabels: { app: api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: frontend } } }]
+      ports: [{ port: 8000, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-prometheus-scrape, namespace: mlops }
+spec:
+  podSelector: { matchExpressions: [{ key: app, operator: In, values: [api, worker] }] }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } } }]
+      ports: [{ port: 8000, protocol: TCP }, { port: 9100, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-frontend-egress, namespace: mlops }
+spec:
+  podSelector: { matchLabels: { app: frontend } }
+  policyTypes: [Egress]
+  egress:
+    - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ podSelector: { matchLabels: { app: api } } }]
+      ports: [{ port: 8000, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-egress-db-dns, namespace: mlops }
+spec:
+  podSelector: { matchExpressions: [{ key: app, operator: In, values: [api, worker, db-migrate] }] }
+  policyTypes: [Egress]
+  egress:
+    - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - ports: [{ port: 5432, protocol: TCP }]     # managed Postgres (restrict by ipBlock in a real cluster)
+    - ports: [{ port: 443, protocol: TCP }]      # model runtime / artifact store
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mlops
+  namespace: mlops
+  annotations: { nginx.ingress.kubernetes.io/limit-rps: "20" }
+spec:
+  tls: [{ hosts: [mlops.example.com], secretName: mlops-tls }]
+  rules:
+    - host: mlops.example.com
+      http:
+        paths:
+          # single entry point: nginx in the frontend pods serves the SPA and proxies /api/ to the api Service
+          - { path: /, pathType: Prefix, backend: { service: { name: frontend, port: { number: 80 } } } }

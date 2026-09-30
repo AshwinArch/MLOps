@@ -1,0 +1,29 @@
+[
+  {
+    "deployment_id": "dep-1001",
+    "model_id": "pump-failure-predictor",
+    "version": "2.0.0",
+    "environment": "production",
+    "status": "SUCCEEDED",
+    "event": "deployment_completed",
+    "timestamp": "2026-07-10T08:30:00Z"
+  },
+  {
+    "deployment_id": "dep-1002",
+    "model_id": "compressor-anomaly-detector",
+    "version": "1.1.0",
+    "environment": "production",
+    "status": "FAILED",
+    "event": "approval_validation_failed",
+    "timestamp": "2026-07-11T09:10:00Z"
+  },
+  {
+    "deployment_id": "dep-1003",
+    "model_id": "valve-health-model",
+    "version": "3.0.0",
+    "environment": "staging",
+    "status": "FAILED",
+    "event": "runtime_timeout",
+    "timestamp": "2026-07-12T12:45:00Z"
+  }
+]

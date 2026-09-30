@@ -1,0 +1,42 @@
+[
+  {
+    "model_id": "pump-failure-predictor",
+    "name": "Pump Failure Predictor",
+    "owner": "Reliability AI Team",
+    "framework": "scikit-learn",
+    "versions": [
+      {
+        "version": "1.0.0",
+        "stage": "ARCHIVED",
+        "approved": true,
+        "artifact_uri": "s3://models/pump/1.0.0"
+      },
+      {
+        "version": "2.0.0",
+        "stage": "PRODUCTION",
+        "approved": true,
+        "artifact_uri": "s3://models/pump/2.0.0"
+      }
+    ]
+  },
+  {
+    "model_id": "compressor-anomaly-detector",
+    "name": "Compressor Anomaly Detector",
+    "owner": "Condition Monitoring Team",
+    "framework": "pytorch",
+    "versions": [
+      {
+        "version": "1.0.0",
+        "stage": "PRODUCTION",
+        "approved": true,
+        "artifact_uri": "s3://models/compressor/1.0.0"
+      },
+      {
+        "version": "1.1.0",
+        "stage": "VALIDATED",
+        "approved": false,
+        "artifact_uri": "s3://models/compressor/1.1.0"
+      }
+    ]
+  }
+]
